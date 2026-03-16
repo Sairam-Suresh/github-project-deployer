@@ -28,6 +28,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "server:app",
         host="0.0.0.0",
-        port=int(os.environ.get("PORT", "8000")),
+        port=int(os.environ.get("PORT", "2345")),
         workers=int(os.environ.get("UVICORN_WORKERS", "2")),
     )

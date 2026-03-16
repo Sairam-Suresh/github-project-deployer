@@ -23,7 +23,7 @@ COPY . .
 
 VOLUME ["/etc/git-signing"]
 
-EXPOSE 8000
+EXPOSE 2345
 
 CMD ["python", "main.py"]
 
