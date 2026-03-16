@@ -1,6 +1,8 @@
+import os
+import socket
+
 from fastapi import FastAPI
 import uvicorn
-import socket
 
 app = FastAPI()
 
@@ -23,4 +25,9 @@ def get_repo(id: str):
     return {"repo_id": id}
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(
+        "server:app",
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", "8000")),
+        workers=int(os.environ.get("UVICORN_WORKERS", "2")),
+    )

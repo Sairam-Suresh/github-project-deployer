@@ -7,6 +7,7 @@ import os
 import socket
 import stat
 import subprocess
+import sys
 from sys import stdout
 from time import sleep
 import shutil
@@ -110,7 +111,7 @@ def reload_files():
 
 # Main Server
 def serve_forever(server: socket.socket) -> None:
-	process = subprocess.Popen(["python3", "server.py"], stdout=stdout, stderr=stdout)
+	process = subprocess.Popen([sys.executable, "server.py"], stdout=stdout, stderr=stdout)
 	print("Running");
 	while True:
 		conn, _ = server.accept()
@@ -125,7 +126,7 @@ def serve_forever(server: socket.socket) -> None:
 				process.terminate()
 				process.wait()
 				reload_files();
-				process = subprocess.Popen(["python", "server.py"])
+				process = subprocess.Popen([sys.executable, "server.py"], stdout=stdout, stderr=stdout)
 				print("[main] Payload started.")
 				continue
 
