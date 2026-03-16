@@ -2,6 +2,7 @@
 # This script will launch the payload and also expose a unix socket at which an update command can be sent to, which will
 # trigger a reload of the payload.
 
+
 import os
 import socket
 import stat
