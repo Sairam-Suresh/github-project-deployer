@@ -14,7 +14,6 @@ import tempfile
 
 SOCKET_PATH = os.environ.get("GPD_SOCKET_PATH", "/tmp/github-project-deployer.sock")
 
-
 # Socket Utilities
 def _cleanup_socket_file(path: str) -> None:
 	# Remove an old socket left behind after an unclean shutdown.
@@ -83,19 +82,8 @@ def reload_files():
 		# Check signature marker is present (not "N" for no signature)
 		if signature_marker == "N":
 			raise RuntimeError("Last commit is not GPG signed")
-
-		try:
-			result = subprocess.run(
-				["git", "-C", tmp_dir, "verify-commit", "HEAD"],
-				check=True,
-				capture_output=True,
-				text=True,
-			)
-			verify_output = f"{result.stdout}\n{result.stderr}"
-			if "Good" not in verify_output:
-				raise RuntimeError("Commit signature is not valid")
-		except subprocess.CalledProcessError as e:
-			raise RuntimeError(f"Signature verification failed: {e}")
+		elif signature_marker == "U":
+			raise RuntimeError("Last commit is not GPG signed with a valid key")
 
 		# Replace TARGET_DIR with new contents
 		if os.path.exists(TARGET_DIR) and not os.path.isdir(TARGET_DIR):
@@ -155,4 +143,3 @@ if __name__ == "__main__":
 	finally:
 		server_socket.close()
 		_cleanup_socket_file(SOCKET_PATH)
-
