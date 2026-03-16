@@ -8,6 +8,9 @@ import stat
 import subprocess
 from sys import stdout
 from time import sleep
+import shutil
+import tempfile
+from git import Repo, GitCommandError, InvalidGitRepositoryError
 
 SOCKET_PATH = os.environ.get("GPD_SOCKET_PATH", "/tmp/github-project-deployer.sock")
 
@@ -37,7 +40,41 @@ def start_unix_socket_server(path: str = SOCKET_PATH, backlog: int = 5) -> socke
 	return server
 
 
+# Reloading Logic
+def reload_files():
+    GIT_REPO_URL = "https://github.com/Sairam-Suresh/github-project-deployer.git"  # Replace with your repo
+    TARGET_DIR = "/tmp/github_project_deployer_payload"
+	
+    tmp_dir = tempfile.mkdtemp(prefix="gpd_clone_")
+    try:
+        print(f"[reload_files] Cloning {GIT_REPO_URL} to {tmp_dir}")
+        repo = Repo.clone_from(GIT_REPO_URL, tmp_dir)
+        commit = repo.head.commit
 
+        # Check author
+        if commit.author.email != "sairam-suresh@users.noreply.github.com" and commit.author.name.lower() != "sairam-suresh":
+            raise RuntimeError("Last commit not authored by sairam-suresh")
+
+        # Check signature
+        if not commit.gpgsig:
+            raise RuntimeError("Last commit is not GPG signed")
+
+        # Optionally, verify signature validity (requires git installed)
+        try:
+            result = repo.git.verify_commit(commit.hexsha)
+            if "Good signature" not in result:
+                raise RuntimeError("Commit signature is not valid")
+        except GitCommandError as e:
+            raise RuntimeError(f"Signature verification failed: {e}")
+
+        # Replace TARGET_DIR with new contents
+        # if os.path.exists(TARGET_DIR):
+        #     shutil.rmtree(TARGET_DIR)
+        # shutil.copytree(tmp_dir, TARGET_DIR, dirs_exist_ok=True)
+        # print(f"[reload_files] Updated {TARGET_DIR} with latest repository contents.")
+
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 # Main Server
 def serve_forever(server: socket.socket) -> None:
@@ -55,6 +92,7 @@ def serve_forever(server: socket.socket) -> None:
 				sleep(1)
 				process.terminate()
 				process.wait()
+				reload_files();
 				process = subprocess.Popen(["python", "server.py"])
 				print("[main] Payload reloaded.")
 				continue

@@ -18,5 +18,9 @@ def reload_server():
         sock.close()
     return {"status": "reload message sent"}
 
+@app.get("/repo/{id}")
+def get_repo(id: str):
+    return {"repo_id": id}
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
