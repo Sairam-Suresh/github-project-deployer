@@ -126,6 +126,17 @@ def serve_forever(server: socket.socket) -> None:
 				process.terminate()
 				process.wait()
 				reload_files();
+				installed_packages = subprocess.run(
+					[sys.executable, "-m", "pip", "freeze"],
+					check=True,
+					capture_output=True,
+					text=True,
+				).stdout.splitlines()
+				if installed_packages:
+					subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", *installed_packages], check=True)
+
+				subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], check=True)
+
 				process = subprocess.Popen([sys.executable, "server.py"], stdout=stdout, stderr=stdout)
 				print("[main] Payload started.")
 				continue
