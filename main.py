@@ -11,7 +11,6 @@ from sys import stdout
 from time import sleep
 import shutil
 import tempfile
-from git import Repo, GitCommandError, InvalidGitRepositoryError
 
 SOCKET_PATH = os.environ.get("GPD_SOCKET_PATH", "/tmp/github-project-deployer.sock")
 
@@ -42,40 +41,84 @@ def start_unix_socket_server(path: str = SOCKET_PATH, backlog: int = 5) -> socke
 
 
 # Reloading Logic
+# For this to work, the file at nano ~/.config/git/allowed_signers must be configured like so:
+# EMAIL <SSH HASH>
+
+# Then, configure git:
+# git config --global gpg.format ssh
+# git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers
 def reload_files():
-    GIT_REPO_URL = "https://github.com/Sairam-Suresh/github-project-deployer.git"  # Replace with your repo
-    TARGET_DIR = "/tmp/github_project_deployer_payload"
-	
-    tmp_dir = tempfile.mkdtemp(prefix="gpd_clone_")
-    try:
-        print(f"[reload_files] Cloning {GIT_REPO_URL} to {tmp_dir}")
-        repo = Repo.clone_from(GIT_REPO_URL, tmp_dir)
-        commit = repo.head.commit
+	GIT_REPO_URL = "https://github.com/Sairam-Suresh/github-project-deployer.git"  # Replace with your repo
+	TARGET_DIR = "."
 
-        # Check author
-        if commit.author.email != "sairam-suresh@users.noreply.github.com" and commit.author.name.lower() != "sairam-suresh":
-            raise RuntimeError("Last commit not authored by sairam-suresh")
+	tmp_dir = tempfile.mkdtemp(prefix="gpd_clone_")
+	try:
+		print(f"[reload_files] Cloning {GIT_REPO_URL} to {tmp_dir}")
+		subprocess.run(["git", "clone", "--quiet", GIT_REPO_URL, tmp_dir], check=True)
 
-        # Check signature
-        if not commit.gpgsig:
-            raise RuntimeError("Last commit is not GPG signed")
+		author_email = subprocess.run(
+			["git", "-C", tmp_dir, "show", "-s", "--format=%ae", "HEAD"],
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+		author_name = subprocess.run(
+			["git", "-C", tmp_dir, "show", "-s", "--format=%an", "HEAD"],
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
 
-        # Optionally, verify signature validity (requires git installed)
-        try:
-            result = repo.git.verify_commit(commit.hexsha)
-            if "Good signature" not in result:
-                raise RuntimeError("Commit signature is not valid")
-        except GitCommandError as e:
-            raise RuntimeError(f"Signature verification failed: {e}")
+		# Check author
+		if author_email != "sairam278.suresh@gmail.com" and author_name.lower() != "Sairam Suresh":
+			raise RuntimeError("Last commit not authored by sairam-suresh")
 
-        # Replace TARGET_DIR with new contents
-        # if os.path.exists(TARGET_DIR):
-        #     shutil.rmtree(TARGET_DIR)
-        # shutil.copytree(tmp_dir, TARGET_DIR, dirs_exist_ok=True)
-        # print(f"[reload_files] Updated {TARGET_DIR} with latest repository contents.")
+		signature_marker = subprocess.run(
+			["git", "-C", tmp_dir, "show", "-s", "--format=%G?", "HEAD"],
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
 
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+		# Check signature marker is present (not "N" for no signature)
+		if signature_marker == "N":
+			raise RuntimeError("Last commit is not GPG signed")
+
+		try:
+			result = subprocess.run(
+				["git", "-C", tmp_dir, "verify-commit", "HEAD"],
+				check=True,
+				capture_output=True,
+				text=True,
+			)
+			verify_output = f"{result.stdout}\n{result.stderr}"
+			if "Good" not in verify_output:
+				raise RuntimeError("Commit signature is not valid")
+		except subprocess.CalledProcessError as e:
+			raise RuntimeError(f"Signature verification failed: {e}")
+
+		# Replace TARGET_DIR with new contents
+		if os.path.exists(TARGET_DIR) and not os.path.isdir(TARGET_DIR):
+			raise RuntimeError(f"Target path exists and is not a directory: {TARGET_DIR}")
+
+		if not os.path.exists(TARGET_DIR):
+			os.makedirs(TARGET_DIR, exist_ok=True)
+		else:
+			for entry in os.listdir(TARGET_DIR):
+				if entry == ".venv":
+					continue
+				entry_path = os.path.join(TARGET_DIR, entry)
+				if os.path.isdir(entry_path) and not os.path.islink(entry_path):
+					shutil.rmtree(entry_path)
+				else:
+					os.unlink(entry_path)
+
+		shutil.copytree(tmp_dir, TARGET_DIR, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".venv"))
+		print(f"[reload_files] Updated {TARGET_DIR} with latest repository contents.")
+	except RuntimeError as e:
+		print(f"[reload_files] Error occurred: {e}. Server was not reloaded.")
+	finally:
+		shutil.rmtree(tmp_dir, ignore_errors=True)
 
 # Main Server
 def serve_forever(server: socket.socket) -> None:
@@ -95,7 +138,7 @@ def serve_forever(server: socket.socket) -> None:
 				process.wait()
 				reload_files();
 				process = subprocess.Popen(["python", "server.py"])
-				print("[main] Payload reloaded.")
+				print("[main] Payload started.")
 				continue
 
 			if command == "shutdown":
