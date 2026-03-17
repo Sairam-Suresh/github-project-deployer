@@ -57,8 +57,9 @@ def update_homelab_efficiency_server():
 
 if __name__ == "__main__":
     uvicorn.run(
-        "server:app",
+        "main:app",
         host="0.0.0.0",
         port=int(os.environ.get("PORT", "2345")),
         workers=int(os.environ.get("UVICORN_WORKERS", "2")),
+        timeout_worker_healthcheck=15
     )
