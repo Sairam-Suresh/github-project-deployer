@@ -1,0 +1,39 @@
+name: Trigger Update & Reload of the Homelab Updater Service
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  test-and-publish:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+
+    env:
+      TEMPLATE_NAME: "debian-vm"
+
+    steps:
+      - name: Tailscale
+        uses: tailscale/github-action@v4
+        with:
+            authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+            ping: homelab-update-service
+    
+      - name: Remove Tailscale DNS
+        run: |
+          sudo tailscale set --accept-dns=false
+        
+      - name: Trigger reload of the Update Service
+        run: |
+          curl -X GET http://100.114.186.102:2345/update
+
+      - name: Wait for Update Service to come back up
+        run: |
+          while ! curl -X GET http://100.114.186.102:2345/ | grep -q 'Hello, World!'; do
+            sleep 5
+          done
