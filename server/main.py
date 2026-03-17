@@ -45,7 +45,7 @@ def update_homelab_efficiency_server():
         ssh_client = paramiko.SSHClient()
         ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
-            hostname = "raspberrypi"
+            hostname = "100.98.133.70"
             port = 22
             username = "sairamsuresh"
 
