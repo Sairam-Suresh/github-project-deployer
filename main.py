@@ -2,7 +2,6 @@
 # This script will launch the payload and also expose a unix socket at which an update command can be sent to, which will
 # trigger a reload of the payload.
 
-
 import os
 import socket
 import stat
@@ -80,11 +79,41 @@ def reload_files():
 			text=True,
 		).stdout.strip()
 
-		# Check signature marker is present (not "N" for no signature)
-		if signature_marker == "N":
-			raise RuntimeError("Last commit is not GPG signed")
-		elif signature_marker == "U":
-			raise RuntimeError("Last commit is not GPG signed with a valid key")
+		# Only "G" means the signature is valid AND the key is in allowedSignersFile.
+		# All other statuses are rejected:
+		#   B = bad/forged signature
+		#   U = valid sig but key NOT in allowedSignersFile
+		#   X = valid sig but key has expired
+		#   Y = valid sig but the signature itself has expired
+		#   E = cannot verify (key missing)
+		#   N = no signature at all
+		_SIG_STATUS_MESSAGES = {
+			"B": "commit has a BAD signature — possible tampering",
+			"U": "commit signature key is not listed in allowedSignersFile",
+			"X": "commit signature was made with an expired key",
+			"Y": "commit signature has expired",
+			"E": "commit signature cannot be verified (signing key not found)",
+			"N": "commit has no signature",
+		}
+		if signature_marker != "G":
+			reason = _SIG_STATUS_MESSAGES.get(
+				signature_marker, f"unknown signature status '{signature_marker}'"
+			)
+			raise RuntimeError(f"Commit signature verification failed: {reason}")
+
+		# Also verify the principal recorded in the signature matches the
+		# expected identity in allowedSignersFile (%GS returns the signer principal).
+		signer_principal = subprocess.run(
+			["git", "-C", tmp_dir, "show", "-s", "--format=%GS", "HEAD"],
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+
+		if "sairam" not in signer_principal.lower():
+			raise RuntimeError(
+				f"Commit was signed by an unexpected principal: '{signer_principal}'"
+			)
 
 		# Replace TARGET_DIR with new contents
 		if os.path.exists(TARGET_DIR) and not os.path.isdir(TARGET_DIR):
