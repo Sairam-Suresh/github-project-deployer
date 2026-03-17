@@ -70,7 +70,7 @@ def reload_files():
 		).stdout.strip()
 
 		# Check author
-		if author_email != "sairam278.suresh@gmail.com" and author_name.lower() != "Sairam Suresh":
+		if "sairam" not in author_name.lower():
 			raise RuntimeError("Last commit not authored by sairam-suresh")
 
 		signature_marker = subprocess.run(
