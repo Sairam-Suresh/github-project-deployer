@@ -3,14 +3,15 @@ FROM docker.io/library/python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
 	PYTHONUNBUFFERED=1 \
 	UVICORN_WORKERS=2 \
-	GIT_ALLOWED_SIGNERS_FILE=/etc/git-signing/allowed_signers
+	GIT_ALLOWED_SIGNERS_FILE=/config/allowed_signers \
+	GPD_KEY_DIR=/data/keys/
 
 WORKDIR /app
 
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends git \
 	&& rm -rf /var/lib/apt/lists/* \
-	&& mkdir -p /root/.config/git /etc/git-signing \
+	&& mkdir -p /root/.config/git /config/allowed_signers /data/keys \
 	&& git config --global gpg.format ssh \
 	&& git config --global gpg.ssh.allowedSignersFile "$GIT_ALLOWED_SIGNERS_FILE"
 
@@ -21,7 +22,7 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 COPY . .
 
-VOLUME ["/etc/git-signing"]
+VOLUME ["/config/", "/data/"]
 
 EXPOSE 2345
 
