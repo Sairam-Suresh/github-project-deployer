@@ -59,7 +59,9 @@ def update_homelab_efficiency_server():
 
             ssh_client.exec_command(f"mv -r {remote_homelab_dir} {remote_home}/homelab_backup")
             put_dir_recursive(sftp, f"{git_repo_temp_storage}/control-plane", remote_homelab_dir)
-            ssh_client.exec_command(f"cd {remote_homelab_dir} && chmod +x ./start.sh && ./start.sh")
+            stdin, stdout, stderr = ssh_client.exec_command(f"cd {remote_homelab_dir} && chmod +x ./start.sh && ./start.sh")
+            print("STDOUT:", stdout.read().decode())
+            print("STDERR:", stderr.read().decode())
 
             sftp.close()
             ssh_client.close()
