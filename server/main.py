@@ -55,8 +55,6 @@ def update_homelab_efficiency_server():
         except Exception as e:
             print(f"An error occurred: {e}")
 
-
-
 if __name__ == "__main__":
     uvicorn.run(
         "server:app",
