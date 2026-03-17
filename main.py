@@ -111,7 +111,7 @@ def reload_files():
 
 # Main Server
 def serve_forever(server: socket.socket) -> None:
-	process = subprocess.Popen([sys.executable, "server.py"], stdout=stdout, stderr=stdout)
+	process = subprocess.Popen([sys.executable, "server/main.py"], stdout=stdout, stderr=stdout)
 	print("Running");
 	while True:
 		conn, _ = server.accept()
@@ -135,9 +135,9 @@ def serve_forever(server: socket.socket) -> None:
 				if installed_packages:
 					subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", *installed_packages], check=True)
 
-				subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], check=True)
+				subprocess.run([sys.executable, "-m", "pip", "install", "-r", "server/requirements.txt"], check=True)
 
-				process = subprocess.Popen([sys.executable, "server.py"], stdout=stdout, stderr=stdout)
+				process = subprocess.Popen([sys.executable, "server/main.py"], stdout=stdout, stderr=stdout)
 				print("[main] Payload started.")
 				continue
 

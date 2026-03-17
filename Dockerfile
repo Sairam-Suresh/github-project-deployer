@@ -26,4 +26,3 @@ VOLUME ["/etc/git-signing"]
 EXPOSE 2345
 
 CMD ["python", "main.py"]
-
