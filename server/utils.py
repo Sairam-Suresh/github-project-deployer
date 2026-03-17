@@ -3,6 +3,48 @@ import posixpath
 import shutil
 import subprocess
 import tempfile
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import (
+	Encoding,
+	NoEncryption,
+	PrivateFormat,
+	PublicFormat,
+)
+
+
+KEY_DIR = os.path.expanduser(
+	os.environ.get("GPD_KEY_DIR", "~/.config/github-project-deployer")
+)
+PRIVATE_KEY_PATH = os.path.join(KEY_DIR, "id_ed25519")
+PUBLIC_KEY_PATH = os.path.join(KEY_DIR, "id_ed25519.pub")
+
+
+def ensure_ssh_keypair() -> None:
+	"""Generate an Ed25519 SSH keypair on first run and always print the public key."""
+	os.makedirs(KEY_DIR, mode=0o700, exist_ok=True)
+
+	if not os.path.exists(PRIVATE_KEY_PATH):
+		print("[ssh] No keypair found - generating a new Ed25519 keypair...")
+
+		private_key = Ed25519PrivateKey.generate()
+		private_bytes = private_key.private_bytes(Encoding.PEM, PrivateFormat.OpenSSH, NoEncryption())
+		public_bytes = private_key.public_key().public_bytes(Encoding.OpenSSH, PublicFormat.OpenSSH)
+
+		with open(PRIVATE_KEY_PATH, "wb") as f:
+			f.write(private_bytes)
+		os.chmod(PRIVATE_KEY_PATH, 0o600)
+
+		with open(PUBLIC_KEY_PATH, "w") as f:
+			f.write(public_bytes.decode() + " github-project-deployer\n")
+		print("[ssh] Keypair generated and saved to", KEY_DIR)
+
+	with open(PUBLIC_KEY_PATH) as f:
+		pub_key = f.read().strip()
+
+	print(
+		"[ssh] Public key (add to ~/.ssh/authorized_keys on each target system):\n"
+		f"\n  {pub_key}\n"
+	)
 
 def sftp_mkdir_p(sftp, remote_dir: str) -> None:
 	"""Create remote_dir recursively if needed (POSIX path)."""
