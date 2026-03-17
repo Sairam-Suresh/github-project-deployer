@@ -1,8 +1,41 @@
 import os
+import posixpath
 import shutil
 import subprocess
 import tempfile
 
+def sftp_mkdir_p(sftp, remote_dir: str) -> None:
+	"""Create remote_dir recursively if needed (POSIX path)."""
+	parts = [p for p in remote_dir.split("/") if p]
+	current = "/" if remote_dir.startswith("/") else ""
+	for part in parts:
+		current = posixpath.join(current, part) if current else part
+		try:
+			sftp.mkdir(current)
+		except IOError:
+			# Directory already exists (or cannot be created due to perms).
+			pass
+
+
+def put_dir_recursive(sftp, local_dir, remote_dir):
+	remote_dir = remote_dir.replace("\\", "/").rstrip("/")
+	sftp_mkdir_p(sftp, remote_dir)
+
+	for root, dirs, files in os.walk(local_dir):
+		rel_root = os.path.relpath(root, local_dir)
+		remote_root = remote_dir if rel_root == "." else posixpath.join(remote_dir, rel_root.replace("\\", "/"))
+
+		# Create remote directories
+		for entry in dirs:
+			remote_path = posixpath.join(remote_root, entry)
+			sftp_mkdir_p(sftp, remote_path)
+
+		# Upload files
+		for entry in files:
+			local_path = os.path.join(root, entry)
+			remote_path = posixpath.join(remote_root, entry)
+			print(f"Uploading {local_path} to {remote_path}")
+			sftp.put(local_path, remote_path)
 
 def clone_git_repo_into_target_dir_and_verify(git_repo_url: str, target_dir: str):
 	"""
