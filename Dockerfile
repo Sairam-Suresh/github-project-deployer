@@ -9,9 +9,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends git \
+	&& apt-get install -y --no-install-recommends git openssh-client \
 	&& rm -rf /var/lib/apt/lists/* \
-	&& mkdir -p /root/.config/git /config/allowed_signers /data/keys \
+	&& mkdir -p /root/.config/git /config /data/keys \
 	&& git config --global gpg.format ssh \
 	&& git config --global gpg.ssh.allowedSignersFile "$GIT_ALLOWED_SIGNERS_FILE"
 
