@@ -30,10 +30,31 @@ jobs:
         
       - name: Trigger reload of the Update Service
         run: |
-          curl -X GET http://100.114.186.102:2345/update
+          curl -fsS -X GET http://100.114.186.102:2345/update
 
       - name: Wait for Update Service to come back up
         run: |
-          while ! curl -X GET http://100.114.186.102:2345/ | grep -q 'Hello, World!'; do
+          sleep 10
+          while ! curl -fsS http://100.114.186.102:2345/ | grep -q '"status":"healthy"'; do
             sleep 5
           done
+
+      - name: Validate Service Commit Hash
+        run: |
+          EXPECTED_SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          RESPONSE="$(curl -fsS http://100.114.186.102:2345/)"
+
+          SERVER_SHORT_SHA="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("commit_short_hash",""))' "$RESPONSE")"
+
+          echo "Expected commit_short_hash: ${EXPECTED_SHORT_SHA}"
+          echo "Server commit_short_hash: ${SERVER_SHORT_SHA}"
+
+          if [ -z "${SERVER_SHORT_SHA}" ] || [ "${SERVER_SHORT_SHA}" = "unknown" ]; then
+            echo "ERROR: Server did not return a valid commit_short_hash"
+            exit 1
+          fi
+
+          if [ "${SERVER_SHORT_SHA}" != "${EXPECTED_SHORT_SHA}" ]; then
+            echo "ERROR: Server is not running the latest commit"
+            exit 1
+          fi

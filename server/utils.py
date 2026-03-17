@@ -19,6 +19,22 @@ PRIVATE_KEY_PATH = os.path.join(KEY_DIR, "id_ed25519")
 PUBLIC_KEY_PATH = os.path.join(KEY_DIR, "id_ed25519.pub")
 
 
+def get_repo_short_commit_hash(repo_dir: str | None = None) -> str:
+	"""Return short commit hash for the repository, or 'unknown' if unavailable."""
+	if repo_dir is None:
+		repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+	try:
+		return subprocess.run(
+			["git", "-C", repo_dir, "rev-parse", "--short", "HEAD"],
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+	except Exception:
+		return "unknown"
+
+
 def ensure_ssh_keypair() -> None:
 	"""Generate an Ed25519 SSH keypair on first run and always print the public key."""
 	os.makedirs(KEY_DIR, mode=0o700, exist_ok=True)

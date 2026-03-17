@@ -9,6 +9,7 @@ from utils import (
     PRIVATE_KEY_PATH,
     clone_git_repo_into_target_dir_and_verify,
     ensure_ssh_keypair,
+    get_repo_short_commit_hash,
     put_dir_recursive,
 )
 
@@ -16,7 +17,10 @@ app = FastAPI()
 
 @app.get("/")
 def read_root():
-    return {"message": "Hello, World!"}
+    return {
+        "status": "healthy",
+        "commit_short_hash": get_repo_short_commit_hash(),
+    }
 
 @app.get("/update")
 def reload_server():
