@@ -221,7 +221,7 @@ def update_homelab_coder_service():
 
             compose_cmd = (
                 f"cd {shlex.quote(remote_s_coder_dir)} && "
-                "podman-compose down && podman-compose up -d"
+                "podman-compose down && podman-compose up -d --build"
             )
             run_checked_command(
                 ssh_client,
