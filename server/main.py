@@ -202,8 +202,8 @@ def update_homelab_coder_service():
                 "Resolving remote home directory",
             )
             remote_home = remote_home_stdout.strip() or "/home/sairamsuresh"
-            remote_s_coder_dir = f"{remote_home}/homelab/s-coder"
-            remote_backup_dir = f"{remote_home}/homelab/s-coder_backup"
+            remote_s_coder_dir = f"{remote_home}/homelab/"
+            remote_backup_dir = f"{remote_home}/homelab_back/"
 
             backup_cmd = (
                 f"if [ -d {shlex.quote(remote_s_coder_dir)} ]; then "
