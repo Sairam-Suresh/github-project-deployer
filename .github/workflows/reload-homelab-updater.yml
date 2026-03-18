@@ -21,7 +21,8 @@ jobs:
       - name: Tailscale
         uses: tailscale/github-action@v4
         with:
-            authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+            oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+            audience: ${{ secrets.TS_AUDIENCE }}
             ping: homelab-update-service
     
       - name: Remove Tailscale DNS
