@@ -3,6 +3,7 @@ import posixpath
 import shutil
 import subprocess
 import tempfile
+import yaml
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import (
 	Encoding,
@@ -32,6 +33,40 @@ def run_checked_command(ssh_client, command: str, action_name: str) -> tuple[str
 		)
 
 	return stdout_text, stderr_text
+
+
+def validate_services_security_opt(compose_text: str) -> tuple[bool, str]:
+	"""Ensure every compose service includes the required SELinux security_opt label."""
+	forbidden_label = "label=disable"
+
+	try:
+		compose_data = yaml.safe_load(compose_text) or {}
+	except yaml.YAMLError as e:
+		return False, f"Invalid compose YAML: {e}"
+
+	services = compose_data.get("services")
+	if not isinstance(services, dict) or not services:
+		return False, "Compose file is missing a valid top-level 'services' mapping"
+
+	for service_name, service_def in services.items():
+		if not isinstance(service_def, dict):
+			return False, f"Service '{service_name}' definition is not a mapping"
+
+		security_opt = service_def.get("security_opt")
+		if security_opt is None:
+			return False, f"Service '{service_name}' is missing 'security_opt'"
+
+		if not isinstance(security_opt, list):
+			return False, f"Service '{service_name}' has non-list 'security_opt'"
+
+		normalized_security_opt = [str(item).strip() for item in security_opt]
+		if forbidden_label in normalized_security_opt:
+			return False, (
+				f"Service '{service_name}' sets forbidden security_opt "
+				f"'{forbidden_label}'"
+			)
+
+	return True, ""
 
 
 def get_repo_short_commit_hash(repo_dir: str | None = None) -> str:

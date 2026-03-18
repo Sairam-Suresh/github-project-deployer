@@ -3,3 +3,4 @@ uvicorn
 paramiko
 cryptography
 python-multipart
+pyyaml

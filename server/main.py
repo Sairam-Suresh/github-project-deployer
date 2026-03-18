@@ -13,9 +13,22 @@ from utils import (
     get_repo_short_commit_hash,
     put_dir_recursive,
     run_checked_command,
+    validate_services_security_opt,
 )
 
 app = FastAPI()
+
+UPDATER_HOMELAB_CONTROL_PLANE_ADDR = os.environ.get("UPDATER_HOMELAB_CONTROL_PLANE_ADDR")
+UPDATER_HOMELAB_CONTROL_PLANE_USERNAME = os.environ.get("UPDATER_HOMELAB_CONTROL_PLANE_USERNAME")
+UPDATER_HOMELAB_CONTROL_PLANE_PORT = int(os.environ.get("UPDATER_HOMELAB_CONTROL_PLANE_PORT"))
+
+UPDATER_HOMELAB_WEBSITE_ADMIN_PANEL_ADDR = os.environ.get("UPDATER_HOMELAB_WEBSITE_ADMIN_PANEL_ADDR")
+UPDATER_HOMELAB_WEBSITE_ADMIN_PANEL_USERNAME = os.environ.get("UPDATER_HOMELAB_WEBSITE_ADMIN_PANEL_USERNAME")
+UPDATER_HOMELAB_WEBSITE_ADMIN_PANEL_PORT = int(os.environ.get("UPDATER_HOMELAB_WEBSITE_ADMIN_PANEL_PORT"))
+
+UPDATER_HOMELAB_S_CODER_ADDR = os.environ.get("UPDATER_HOMELAB_S_CODER_ADDR")
+UPDATER_HOMELAB_S_CODER_USERNAME = os.environ.get("UPDATER_HOMELAB_S_CODER_USERNAME")
+UPDATER_HOMELAB_S_CODER_PORT = int(os.environ.get("UPDATER_HOMELAB_S_CODER_PORT"))
 
 @app.get("/")
 def read_root():
@@ -47,9 +60,9 @@ def update_homelab_efficiency_server():
         ssh_client = paramiko.SSHClient()
         ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
-            hostname = "100.98.133.70"
-            port = 22
-            username = "sairamsuresh"
+            hostname = UPDATER_HOMELAB_CONTROL_PLANE_ADDR
+            port = UPDATER_HOMELAB_CONTROL_PLANE_PORT
+            username = UPDATER_HOMELAB_CONTROL_PLANE_USERNAME
 
             pkey = paramiko.Ed25519Key.from_private_key_file(PRIVATE_KEY_PATH)
             ssh_client.connect(hostname, port, username=username, pkey=pkey)
@@ -99,9 +112,9 @@ def update_homelab_panel(file: UploadFile = File(...)):
     sftp = None
 
     try:
-        hostname = "100.98.133.70"
-        port = 22
-        username = "sairamsuresh"
+        hostname = UPDATER_HOMELAB_WEBSITE_ADMIN_PANEL_ADDR
+        port = UPDATER_HOMELAB_WEBSITE_ADMIN_PANEL_PORT
+        username = UPDATER_HOMELAB_WEBSITE_ADMIN_PANEL_USERNAME
 
         pkey = paramiko.Ed25519Key.from_private_key_file(PRIVATE_KEY_PATH)
         ssh_client.connect(hostname, port, username=username, pkey=pkey)
@@ -140,6 +153,96 @@ def update_homelab_panel(file: UploadFile = File(...)):
         if sftp:
             sftp.close()
         ssh_client.close()
+
+@app.get("/update/s-coder")
+def update_homelab_coder_service():
+    print("The Homelab Coder Service is being updated...")
+
+    with tempfile.TemporaryDirectory() as git_repo_temp_storage:
+        clone_git_repo_into_target_dir_and_verify(
+            git_repo_url="https://github.com/Sairam-Suresh/homelab.git",
+            target_dir=git_repo_temp_storage,
+        )
+
+        deploy_src_dir = os.path.join(git_repo_temp_storage, "s-coder")
+        compose_candidates = [
+            os.path.join(deploy_src_dir, "docker-compose.yml"),
+            os.path.join(deploy_src_dir, "docker-compose.yaml"),
+        ]
+
+        compose_file_path = next((path for path in compose_candidates if os.path.isfile(path)), None)
+        if not compose_file_path:
+            raise HTTPException(
+                status_code=404,
+                detail="Could not find docker-compose.yml or docker-compose.yaml in ./s-coder",
+            )
+
+        with open(compose_file_path, "r", encoding="utf-8") as f:
+            compose_text = f.read()
+        is_valid, reason = validate_services_security_opt(compose_text)
+        if not is_valid:
+            raise HTTPException(status_code=422, detail=f"Compose policy check failed: {reason}")
+
+        ssh_client = paramiko.SSHClient()
+        ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        sftp = None
+
+        try:
+            hostname = UPDATER_HOMELAB_S_CODER_ADDR
+            port = UPDATER_HOMELAB_S_CODER_PORT
+            username = UPDATER_HOMELAB_S_CODER_USERNAME
+
+            pkey = paramiko.Ed25519Key.from_private_key_file(PRIVATE_KEY_PATH)
+            ssh_client.connect(hostname, port, username=username, pkey=pkey)
+            sftp = ssh_client.open_sftp()
+
+            remote_home_stdout, _ = run_checked_command(
+                ssh_client,
+                'printf %s "$HOME"',
+                "Resolving remote home directory",
+            )
+            remote_home = remote_home_stdout.strip() or "/home/sairamsuresh"
+            remote_s_coder_dir = f"{remote_home}/homelab/s-coder"
+            remote_backup_dir = f"{remote_home}/homelab/s-coder_backup"
+
+            backup_cmd = (
+                f"if [ -d {shlex.quote(remote_s_coder_dir)} ]; then "
+                f"rm -rf {shlex.quote(remote_backup_dir)} && "
+                f"mv {shlex.quote(remote_s_coder_dir)} {shlex.quote(remote_backup_dir)}; "
+                "fi"
+            )
+            run_checked_command(
+                ssh_client,
+                f"bash -lc {shlex.quote(backup_cmd)}",
+                "Backing up existing s-coder directory",
+            )
+
+            put_dir_recursive(sftp, deploy_src_dir, remote_s_coder_dir)
+
+            compose_cmd = (
+                f"cd {shlex.quote(remote_s_coder_dir)} && "
+                "podman-compose down && podman-compose up -d"
+            )
+            run_checked_command(
+                ssh_client,
+                f"bash -lc {shlex.quote(compose_cmd)}",
+                "Restarting coder stack",
+            )
+
+            return {
+                "status": "updated",
+                "service": "s-coder",
+            }
+        except paramiko.AuthenticationException as e:
+            raise HTTPException(status_code=401, detail=f"Authentication failed: {e}") from e
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to update homelab coder service: {e}") from e
+        finally:
+            if sftp:
+                sftp.close()
+            ssh_client.close()
 
 if __name__ == "__main__":
     ensure_ssh_keypair()
