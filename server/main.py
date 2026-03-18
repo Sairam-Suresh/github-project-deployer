@@ -1,7 +1,8 @@
 import os
+import shlex
 import socket
 
-from fastapi import FastAPI
+from fastapi import FastAPI, File, HTTPException, UploadFile
 import uvicorn
 import tempfile
 import paramiko
@@ -11,6 +12,7 @@ from utils import (
     ensure_ssh_keypair,
     get_repo_short_commit_hash,
     put_dir_recursive,
+    run_checked_command,
 )
 
 app = FastAPI()
@@ -53,15 +55,27 @@ def update_homelab_efficiency_server():
             ssh_client.connect(hostname, port, username=username, pkey=pkey)
             sftp = ssh_client.open_sftp()
 
-            stdin, stdout, stderr = ssh_client.exec_command("printf %s \"$HOME\"")
-            remote_home = stdout.read().decode().strip() or "/home/sairamsuresh"
+            remote_home_stdout, _ = run_checked_command(
+                ssh_client,
+                'printf %s "$HOME"',
+                "Resolving remote home directory",
+            )
+            remote_home = remote_home_stdout.strip() or "/home/sairamsuresh"
             remote_homelab_dir = f"{remote_home}/homelab"
 
-            ssh_client.exec_command(f"mv -r {remote_homelab_dir} {remote_home}/homelab_backup")
+            run_checked_command(
+                ssh_client,
+                f"mv {shlex.quote(remote_homelab_dir)} {shlex.quote(f'{remote_home}/homelab_backup')}",
+                "Backing up existing homelab directory",
+            )
             put_dir_recursive(sftp, f"{git_repo_temp_storage}/control-plane", remote_homelab_dir)
-            stdin, stdout, stderr = ssh_client.exec_command(f"cd {remote_homelab_dir} && chmod +x ./start.sh && ./start.sh")
-            print("STDOUT:", stdout.read().decode())
-            print("STDERR:", stderr.read().decode())
+            stdout_text, stderr_text = run_checked_command(
+                ssh_client,
+                f"bash -lc {shlex.quote(f'cd {remote_homelab_dir} && chmod +x ./start.sh && ./start.sh')}",
+                "Starting homelab control-plane",
+            )
+            print("STDOUT:", stdout_text)
+            print("STDERR:", stderr_text)
 
             sftp.close()
             ssh_client.close()
@@ -70,6 +84,62 @@ def update_homelab_efficiency_server():
             print("Authentication failed. Please verify your credentials.")
         except Exception as e:
             print(f"An error occurred: {e}")
+
+@app.get("/update/homelab_website_admin_panel")
+def update_homelab_panel(file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing uploaded file name")
+
+    archive_name = os.path.basename(file.filename)
+    if not archive_name.endswith(".tar.gz"):
+        raise HTTPException(status_code=400, detail="Uploaded file must be a .tar.gz archive")
+
+    ssh_client = paramiko.SSHClient()
+    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    sftp = None
+
+    try:
+        hostname = "100.98.133.70"
+        port = 22
+        username = "sairamsuresh"
+
+        pkey = paramiko.Ed25519Key.from_private_key_file(PRIVATE_KEY_PATH)
+        ssh_client.connect(hostname, port, username=username, pkey=pkey)
+
+        sftp = ssh_client.open_sftp()
+        file.file.seek(0)
+
+        remote_home_stdout, _ = run_checked_command(
+            ssh_client,
+            'printf %s "$HOME"',
+            "Resolving remote home directory",
+        )
+        remote_home = remote_home_stdout.strip() or "/home/sairamsuresh"
+        remote_archive_path = f"{remote_home}/{archive_name}"
+        remote_homelab_dir = f"{remote_home}/homelab"
+
+        sftp.putfo(file.file, remote_archive_path)
+
+        load_cmd = f"podman load < {shlex.quote(remote_archive_path)}"
+        run_checked_command(ssh_client, f"bash -lc {shlex.quote(load_cmd)}", "Loading podman image")
+
+        compose_cmd = (
+            f"cd {shlex.quote(remote_homelab_dir)} && "
+            "podman-compose down && podman-compose up -d"
+        )
+        run_checked_command(ssh_client, f"bash -lc {shlex.quote(compose_cmd)}", "Restarting homelab stack")
+
+        return {
+            "status": "updated",
+        }
+    except paramiko.AuthenticationException as e:
+        raise HTTPException(status_code=401, detail=f"Authentication failed: {e}") from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update homelab panel: {e}") from e
+    finally:
+        if sftp:
+            sftp.close()
+        ssh_client.close()
 
 if __name__ == "__main__":
     ensure_ssh_keypair()

@@ -19,6 +19,21 @@ PRIVATE_KEY_PATH = os.path.join(KEY_DIR, "id_ed25519")
 PUBLIC_KEY_PATH = os.path.join(KEY_DIR, "id_ed25519.pub")
 
 
+def run_checked_command(ssh_client, command: str, action_name: str) -> tuple[str, str]:
+	"""Run a command on an SSH client and raise if it exits non-zero."""
+	stdin, stdout, stderr = ssh_client.exec_command(command)
+	exit_status = stdout.channel.recv_exit_status()
+	stdout_text = stdout.read().decode()
+	stderr_text = stderr.read().decode()
+
+	if exit_status != 0:
+		raise RuntimeError(
+			f"{action_name} failed with exit code {exit_status}. stderr: {stderr_text.strip()}"
+		)
+
+	return stdout_text, stderr_text
+
+
 def get_repo_short_commit_hash(repo_dir: str | None = None) -> str:
 	"""Return short commit hash for the repository, or 'unknown' if unavailable."""
 	if repo_dir is None:
