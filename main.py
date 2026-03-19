@@ -1,186 +1,316 @@
-# main.py
-# This script will launch the payload and also expose a unix socket at which an update command can be sent to, which will
-# trigger a reload of the payload.
-
 import os
+import shlex
 import socket
-import stat
-import subprocess
-import sys
-from sys import stdout
-from time import sleep
-import shutil
+
+from fastapi import FastAPI, File, HTTPException, UploadFile
+import uvicorn
 import tempfile
+import paramiko
+from utils import (
+    PRIVATE_KEY_PATH,
+    clone_git_repo_into_target_dir_and_verify,
+    ensure_ssh_keypair,
+    get_repo_short_commit_hash,
+    put_dir_recursive,
+    run_checked_command,
+    validate_services_security_opt,
+)
 
-SOCKET_PATH = os.environ.get("GPD_SOCKET_PATH", "/tmp/github-project-deployer.sock")
+app = FastAPI()
 
-# Socket Utilities
-def _cleanup_socket_file(path: str) -> None:
-	# Remove an old socket left behind after an unclean shutdown.
-	if not os.path.exists(path):
-		return
+UPDATER_HOMELAB_CONTROL_PLANE_ADDR = os.environ.get("UPDATER_HOMELAB_CONTROL_PLANE_ADDR")
+UPDATER_HOMELAB_CONTROL_PLANE_USERNAME = os.environ.get("UPDATER_HOMELAB_CONTROL_PLANE_USERNAME")
+UPDATER_HOMELAB_CONTROL_PLANE_PORT = int(os.environ.get("UPDATER_HOMELAB_CONTROL_PLANE_PORT"))
 
-	mode = os.lstat(path).st_mode
-	if stat.S_ISSOCK(mode):
-		os.unlink(path)
-		return
+UPDATER_HOMELAB_WEBSITE_ADMIN_PANEL_ADDR = os.environ.get("UPDATER_HOMELAB_WEBSITE_ADMIN_PANEL_ADDR")
+UPDATER_HOMELAB_WEBSITE_ADMIN_PANEL_USERNAME = os.environ.get("UPDATER_HOMELAB_WEBSITE_ADMIN_PANEL_USERNAME")
+UPDATER_HOMELAB_WEBSITE_ADMIN_PANEL_PORT = int(os.environ.get("UPDATER_HOMELAB_WEBSITE_ADMIN_PANEL_PORT"))
 
-	raise RuntimeError(f"Refusing to remove non-socket path: {path}")
+UPDATER_HOMELAB_S_CODER_ADDR = os.environ.get("UPDATER_HOMELAB_S_CODER_ADDR")
+UPDATER_HOMELAB_S_CODER_USERNAME = os.environ.get("UPDATER_HOMELAB_S_CODER_USERNAME")
+UPDATER_HOMELAB_S_CODER_PORT = int(os.environ.get("UPDATER_HOMELAB_S_CODER_PORT"))
 
+@app.get("/")
+def read_root():
+    return {
+        "status": "healthy",
+        "commit_short_hash": "",
+    }
 
-def start_unix_socket_server(path: str = SOCKET_PATH, backlog: int = 5) -> socket.socket:
-	_cleanup_socket_file(path)
+@app.get("/update")
+def reload_server(file: UploadFile = File(None)):
+    archive_name = None
+    if file and getattr(file, "filename", None):
+        archive_name = os.path.basename(file.filename)
+        if not archive_name.endswith(".tar.gz"):
+            raise HTTPException(status_code=400, detail="Uploaded file must be a .tar.gz archive")
 
-	server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-	server.bind(path)
-	server.listen(backlog)
+    ssh_client = paramiko.SSHClient()
+    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    sftp = None
 
-	print(f"[main] Unix socket server listening at {path}")
-	return server
+    with tempfile.TemporaryDirectory() as git_repo_temp_storage:
+        clone_git_repo_into_target_dir_and_verify(
+            git_repo_url="https://github.com/Sairam-Suresh/homelab.git",
+            target_dir=git_repo_temp_storage
+        )
 
+        try:
+            hostname = UPDATER_HOMELAB_CONTROL_PLANE_ADDR
+            port = UPDATER_HOMELAB_CONTROL_PLANE_PORT
+            username = UPDATER_HOMELAB_CONTROL_PLANE_USERNAME
 
-# Reloading Logic
-# For this to work, the file at nano ~/.config/git/allowed_signers must be configured like so:
-# EMAIL <SSH HASH>
+            pkey = paramiko.Ed25519Key.from_private_key_file(PRIVATE_KEY_PATH)
+            ssh_client.connect(hostname, port, username=username, pkey=pkey)
 
-# Then, configure git:
-# git config --global gpg.format ssh
-# git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers
-def reload_files():
-	GIT_REPO_URL = "https://github.com/Sairam-Suresh/github-project-deployer.git"  # Replace with your repo
-	TARGET_DIR = "."
+            # Always resolve remote home and open SFTP (we need SFTP to transfer the directory)
+            remote_home_stdout, _ = run_checked_command(
+                ssh_client,
+                'printf %s "$HOME"',
+                "Resolving remote home directory",
+            )
+            remote_home = remote_home_stdout.strip() or "/home/sairamsuresh"
+            remote_archive_path = f"{remote_home}/{archive_name}" if archive_name else None
+            remote_homelab_updater_dir = f"{remote_home}/homelab_updater"
 
-	tmp_dir = tempfile.mkdtemp(prefix="gpd_clone_")
-	try:
-		print(f"[reload_files] Cloning {GIT_REPO_URL} to {tmp_dir}")
-		subprocess.run(["git", "clone", "--quiet", GIT_REPO_URL, tmp_dir], check=True)
+            # Open SFTP regardless of whether an image archive was provided
+            sftp = ssh_client.open_sftp()
 
-		author_email = subprocess.run(
-			["git", "-C", tmp_dir, "show", "-s", "--format=%ae", "HEAD"],
-			check=True,
-			capture_output=True,
-			text=True,
-		).stdout.strip()
-		author_name = subprocess.run(
-			["git", "-C", tmp_dir, "show", "-s", "--format=%an", "HEAD"],
-			check=True,
-			capture_output=True,
-			text=True,
-		).stdout.strip()
+            # If an archive was uploaded, push and load the podman image
+            if archive_name and file is not None:
+                file.file.seek(0)
+                sftp.putfo(file.file, remote_archive_path)
 
-		# Check author
-		if "sairam" not in author_name.lower():
-			raise RuntimeError("Last commit not authored by sairam-suresh")
+                load_cmd = f"podman load < {shlex.quote(remote_archive_path)}"
+                run_checked_command(ssh_client, f"bash -lc {shlex.quote(load_cmd)}", "Loading podman image")
 
-		signature_marker = subprocess.run(
-			["git", "-C", tmp_dir, "show", "-s", "--format=%G?", "HEAD"],
-			check=True,
-			capture_output=True,
-			text=True,
-		).stdout.strip()
+            # Always update the remote directory and run the updater script
+            put_dir_recursive(sftp, f"{git_repo_temp_storage}/s-homelab-updater", remote_homelab_updater_dir)
 
-		# Only "G" means the signature is valid AND the key is in allowedSignersFile.
-		# All other statuses are rejected:
-		#   B = bad/forged signature
-		#   U = valid sig but key NOT in allowedSignersFile
-		#   X = valid sig but key has expired
-		#   Y = valid sig but the signature itself has expired
-		#   E = cannot verify (key missing)
-		#   N = no signature at all
-		_SIG_STATUS_MESSAGES = {
-			"B": "commit has a BAD signature — possible tampering",
-			"U": "commit signature key is not listed in allowedSignersFile",
-			"X": "commit signature was made with an expired key",
-			"Y": "commit signature has expired",
-			"E": "commit signature cannot be verified (signing key not found)",
-			"N": "commit has no signature",
-		}
-		if signature_marker != "G":
-			reason = _SIG_STATUS_MESSAGES.get(
-				signature_marker, f"unknown signature status '{signature_marker}'"
-			)
-			raise RuntimeError(f"Commit signature verification failed: {reason}")
+            compose_cmd = (
+                f"cd {shlex.quote(remote_homelab_updater_dir)} && "
+                "chmod +x ./start.sh && ./start.sh"
+            )
+            run_checked_command(ssh_client, f"bash -lc {shlex.quote(compose_cmd)}", "Restarting homelab updater stack")
 
-		# Also verify the principal recorded in the signature matches the
-		# expected identity in allowedSignersFile (%GS returns the signer principal).
-		signer_principal = subprocess.run(
-			["git", "-C", tmp_dir, "show", "-s", "--format=%GS", "HEAD"],
-			check=True,
-			capture_output=True,
-			text=True,
-		).stdout.strip()
+            return {
+                "status": "updated",
+            }
+        except paramiko.AuthenticationException as e:
+            print(f"Authentication failed: {e}")
+            raise HTTPException(status_code=401, detail=f"Authentication failed: {e}") from e
+        except Exception as e:
+            print(f"Failed to update homelab panel: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to update homelab panel: {e}") from e
+        finally:
+            if sftp:
+                sftp.close()
+            ssh_client.close()
 
-		if "sairam" not in signer_principal.lower():
-			raise RuntimeError(
-				f"Commit was signed by an unexpected principal: '{signer_principal}'"
-			)
+@app.get("/update/homelab_control_plane")
+def update_homelab_efficiency_server():
+    print("The Homelab Efficiency Server (Raspberry Pi) is being updated...")
 
-		# Replace TARGET_DIR with new contents
-		if os.path.exists(TARGET_DIR) and not os.path.isdir(TARGET_DIR):
-			raise RuntimeError(f"Target path exists and is not a directory: {TARGET_DIR}")
+    with tempfile.TemporaryDirectory() as git_repo_temp_storage:
+        clone_git_repo_into_target_dir_and_verify(
+            git_repo_url="https://github.com/Sairam-Suresh/homelab.git",
+            target_dir=git_repo_temp_storage
+        )
 
-		if not os.path.exists(TARGET_DIR):
-			os.makedirs(TARGET_DIR, exist_ok=True)
-		else:
-			for entry in os.listdir(TARGET_DIR):
-				if entry == ".venv":
-					continue
-				entry_path = os.path.join(TARGET_DIR, entry)
-				if os.path.isdir(entry_path) and not os.path.islink(entry_path):
-					shutil.rmtree(entry_path)
-				else:
-					os.unlink(entry_path)
+        ssh_client = paramiko.SSHClient()
+        ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            hostname = UPDATER_HOMELAB_CONTROL_PLANE_ADDR
+            port = UPDATER_HOMELAB_CONTROL_PLANE_PORT
+            username = UPDATER_HOMELAB_CONTROL_PLANE_USERNAME
 
-		shutil.copytree(tmp_dir, TARGET_DIR, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".venv"))
-		print(f"[reload_files] Updated {TARGET_DIR} with latest repository contents.")
-	except RuntimeError as e:
-		print(f"[reload_files] Error occurred: {e}. Server was not reloaded.")
-	finally:
-		shutil.rmtree(tmp_dir, ignore_errors=True)
+            pkey = paramiko.Ed25519Key.from_private_key_file(PRIVATE_KEY_PATH)
+            ssh_client.connect(hostname, port, username=username, pkey=pkey)
+            sftp = ssh_client.open_sftp()
 
-# Main Server
-def serve_forever(server: socket.socket) -> None:
-	process = subprocess.Popen([sys.executable, "server/main.py"], stdout=stdout, stderr=stdout)
-	print("Running");
-	while True:
-		conn, _ = server.accept()
+            remote_home_stdout, _ = run_checked_command(
+                ssh_client,
+                'printf %s "$HOME"',
+                "Resolving remote home directory",
+            )
+            remote_home = remote_home_stdout.strip() or "/home/sairamsuresh"
+            remote_homelab_dir = f"{remote_home}/homelab"
 
-		with conn:
-			raw_command = conn.recv(1024)
-			command = raw_command.decode("utf-8", errors="ignore").strip().lower()
+            run_checked_command(
+                ssh_client,
+                f"mv {shlex.quote(remote_homelab_dir)} {shlex.quote(f'{remote_home}/homelab_backup')}",
+                "Backing up existing homelab directory",
+            )
+            put_dir_recursive(sftp, f"{git_repo_temp_storage}/control-plane", remote_homelab_dir)
+            stdout_text, stderr_text = run_checked_command(
+                ssh_client,
+                f"bash -lc {shlex.quote(f'cd {remote_homelab_dir} && chmod +x ./start.sh && ./start.sh')}",
+                "Starting homelab control-plane",
+            )
+            print("STDOUT:", stdout_text)
+            print("STDERR:", stderr_text)
 
-			if command == "update":
-				print("[main] Received update command. Triggering payload reload in a second...")
-				sleep(1)
-				process.terminate()
-				process.wait()
-				reload_files();
-				installed_packages = subprocess.run(
-					[sys.executable, "-m", "pip", "freeze"],
-					check=True,
-					capture_output=True,
-					text=True,
-				).stdout.splitlines()
-				if installed_packages:
-					subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", *installed_packages], check=True)
+            sftp.close()
+            ssh_client.close()
+        except paramiko.AuthenticationException as e:
+            print(e)
+            print("Authentication failed. Please verify your credentials.")
+        except Exception as e:
+            print(f"An error occurred: {e}")
 
-				subprocess.run([sys.executable, "-m", "pip", "install", "-r", "server/requirements.txt"], check=True)
+@app.get("/update/homelab_website_admin_panel")
+def update_homelab_panel(file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing uploaded file name")
 
-				process = subprocess.Popen([sys.executable, "server/main.py"], stdout=stdout, stderr=stdout)
-				print("[main] Payload started.")
-				continue
+    archive_name = os.path.basename(file.filename)
+    if not archive_name.endswith(".tar.gz"):
+        raise HTTPException(status_code=400, detail="Uploaded file must be a .tar.gz archive")
 
-			if command == "shutdown":
-				print("[main] Received shutdown command. Exiting...")
-				break
+    ssh_client = paramiko.SSHClient()
+    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    sftp = None
 
-			conn.sendall(b"ERR: unknown command\n")
+    try:
+        hostname = UPDATER_HOMELAB_WEBSITE_ADMIN_PANEL_ADDR
+        port = UPDATER_HOMELAB_WEBSITE_ADMIN_PANEL_PORT
+        username = UPDATER_HOMELAB_WEBSITE_ADMIN_PANEL_USERNAME
 
+        pkey = paramiko.Ed25519Key.from_private_key_file(PRIVATE_KEY_PATH)
+        ssh_client.connect(hostname, port, username=username, pkey=pkey)
+
+        sftp = ssh_client.open_sftp()
+        file.file.seek(0)
+
+        remote_home_stdout, _ = run_checked_command(
+            ssh_client,
+            'printf %s "$HOME"',
+            "Resolving remote home directory",
+        )
+        remote_home = remote_home_stdout.strip() or "/home/sairamsuresh"
+        remote_archive_path = f"{remote_home}/{archive_name}"
+        remote_homelab_dir = f"{remote_home}/homelab"
+
+        sftp.putfo(file.file, remote_archive_path)
+
+        load_cmd = f"podman load < {shlex.quote(remote_archive_path)}"
+        run_checked_command(ssh_client, f"bash -lc {shlex.quote(load_cmd)}", "Loading podman image")
+
+        compose_cmd = (
+            f"cd {shlex.quote(remote_homelab_dir)} && "
+            "podman-compose down && podman-compose up -d"
+        )
+        run_checked_command(ssh_client, f"bash -lc {shlex.quote(compose_cmd)}", "Restarting homelab stack")
+
+        return {
+            "status": "updated",
+        }
+    except paramiko.AuthenticationException as e:
+        raise HTTPException(status_code=401, detail=f"Authentication failed: {e}") from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update homelab panel: {e}") from e
+    finally:
+        if sftp:
+            sftp.close()
+        ssh_client.close()
+
+@app.get("/update/s-coder")
+def update_homelab_coder_service():
+    print("The Homelab Coder Service is being updated...")
+
+    with tempfile.TemporaryDirectory() as git_repo_temp_storage:
+        clone_git_repo_into_target_dir_and_verify(
+            git_repo_url="https://github.com/Sairam-Suresh/homelab.git",
+            target_dir=git_repo_temp_storage,
+        )
+
+        deploy_src_dir = os.path.join(git_repo_temp_storage, "s-coder")
+        compose_candidates = [
+            os.path.join(deploy_src_dir, "docker-compose.yml"),
+            os.path.join(deploy_src_dir, "docker-compose.yaml"),
+        ]
+
+        compose_file_path = next((path for path in compose_candidates if os.path.isfile(path)), None)
+        if not compose_file_path:
+            raise HTTPException(
+                status_code=404,
+                detail="Could not find docker-compose.yml or docker-compose.yaml in ./s-coder",
+            )
+
+        with open(compose_file_path, "r", encoding="utf-8") as f:
+            compose_text = f.read()
+        is_valid, reason = validate_services_security_opt(compose_text)
+        if not is_valid:
+            raise HTTPException(status_code=422, detail=f"Compose policy check failed: {reason}")
+
+        ssh_client = paramiko.SSHClient()
+        ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        sftp = None
+
+        try:
+            hostname = UPDATER_HOMELAB_S_CODER_ADDR
+            port = UPDATER_HOMELAB_S_CODER_PORT
+            username = UPDATER_HOMELAB_S_CODER_USERNAME
+
+            pkey = paramiko.Ed25519Key.from_private_key_file(PRIVATE_KEY_PATH)
+            ssh_client.connect(hostname, port, username=username, pkey=pkey)
+            sftp = ssh_client.open_sftp()
+
+            remote_home_stdout, _ = run_checked_command(
+                ssh_client,
+                'printf %s "$HOME"',
+                "Resolving remote home directory",
+            )
+            remote_home = remote_home_stdout.strip() or "/home/sairamsuresh"
+            remote_s_coder_dir = f"{remote_home}/homelab/"
+            remote_backup_dir = f"{remote_home}/homelab_back/"
+
+            backup_cmd = (
+                f"if [ -d {shlex.quote(remote_s_coder_dir)} ]; then "
+                f"rm -rf {shlex.quote(remote_backup_dir)} && "
+                f"mv {shlex.quote(remote_s_coder_dir)} {shlex.quote(remote_backup_dir)}; "
+                "fi"
+            )
+            run_checked_command(
+                ssh_client,
+                f"bash -lc {shlex.quote(backup_cmd)}",
+                "Backing up existing s-coder directory",
+            )
+
+            put_dir_recursive(sftp, deploy_src_dir, remote_s_coder_dir)
+
+            compose_cmd = (
+                f"cd {shlex.quote(remote_s_coder_dir)} && "
+                "podman-compose down && podman-compose up -d --build"
+            )
+            run_checked_command(
+                ssh_client,
+                f"bash -lc {shlex.quote(compose_cmd)}",
+                "Restarting coder stack",
+            )
+
+            return {
+                "status": "updated",
+                "service": "s-coder",
+            }
+        except paramiko.AuthenticationException as e:
+            raise HTTPException(status_code=401, detail=f"Authentication failed: {e}") from e
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to update homelab coder service: {e}") from e
+        finally:
+            if sftp:
+                sftp.close()
+            ssh_client.close()
 
 if __name__ == "__main__":
-	server_socket = start_unix_socket_server()
-	try:
-		serve_forever(server_socket)
-	finally:
-		server_socket.close()
-		_cleanup_socket_file(SOCKET_PATH)
+    ensure_ssh_keypair()
+
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", "2345")),
+        workers=int(os.environ.get("UVICORN_WORKERS", "2")),
+        timeout_worker_healthcheck=15
+    )

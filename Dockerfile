@@ -15,10 +15,10 @@ RUN apt-get update \
 	&& git config --global gpg.format ssh \
 	&& git config --global gpg.ssh.allowedSignersFile "$GIT_ALLOWED_SIGNERS_FILE"
 
-COPY server/requirements.txt ./server/requirements.txt
+COPY requirements.txt ./requirements.txt
 
 RUN pip install --no-cache-dir --upgrade pip \
-	&& pip install -r server/requirements.txt
+	&& pip install -r requirements.txt
 
 COPY . .
 
