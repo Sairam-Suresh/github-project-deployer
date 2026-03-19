@@ -97,8 +97,10 @@ def reload_server(file: UploadFile = File(None)):
                 "status": "updated",
             }
         except paramiko.AuthenticationException as e:
+            print(f"Authentication failed: {e}")
             raise HTTPException(status_code=401, detail=f"Authentication failed: {e}") from e
         except Exception as e:
+            print(f"Failed to update homelab panel: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to update homelab panel: {e}") from e
         finally:
             if sftp:
