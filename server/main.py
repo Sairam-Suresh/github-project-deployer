@@ -38,14 +38,72 @@ def read_root():
     }
 
 @app.get("/update")
-def reload_server():
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    try:
-        sock.connect("/tmp/github-project-deployer.sock")
-        sock.sendall(b"update")
-    finally:
-        sock.close()
-    return {"status": "reload message sent"}
+def reload_server(file: UploadFile = File(None)):
+    archive_name = None
+    if file and getattr(file, "filename", None):
+        archive_name = os.path.basename(file.filename)
+        if not archive_name.endswith(".tar.gz"):
+            raise HTTPException(status_code=400, detail="Uploaded file must be a .tar.gz archive")
+
+    ssh_client = paramiko.SSHClient()
+    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    sftp = None
+
+    with tempfile.TemporaryDirectory() as git_repo_temp_storage:
+        clone_git_repo_into_target_dir_and_verify(
+            git_repo_url="https://github.com/Sairam-Suresh/homelab.git",
+            target_dir=git_repo_temp_storage
+        )
+
+        try:
+            hostname = UPDATER_HOMELAB_CONTROL_PLANE_ADDR
+            port = UPDATER_HOMELAB_CONTROL_PLANE_PORT
+            username = UPDATER_HOMELAB_CONTROL_PLANE_USERNAME
+
+            pkey = paramiko.Ed25519Key.from_private_key_file(PRIVATE_KEY_PATH)
+            ssh_client.connect(hostname, port, username=username, pkey=pkey)
+
+            # Always resolve remote home and open SFTP (we need SFTP to transfer the directory)
+            remote_home_stdout, _ = run_checked_command(
+                ssh_client,
+                'printf %s "$HOME"',
+                "Resolving remote home directory",
+            )
+            remote_home = remote_home_stdout.strip() or "/home/sairamsuresh"
+            remote_archive_path = f"{remote_home}/{archive_name}" if archive_name else None
+            remote_homelab_updater_dir = f"{remote_home}/homelab_updater"
+
+            # Open SFTP regardless of whether an image archive was provided
+            sftp = ssh_client.open_sftp()
+
+            # If an archive was uploaded, push and load the podman image
+            if archive_name and file is not None:
+                file.file.seek(0)
+                sftp.putfo(file.file, remote_archive_path)
+
+                load_cmd = f"podman load < {shlex.quote(remote_archive_path)}"
+                run_checked_command(ssh_client, f"bash -lc {shlex.quote(load_cmd)}", "Loading podman image")
+
+            # Always update the remote directory and run the updater script
+            put_dir_recursive(sftp, f"{git_repo_temp_storage}/s-homelab-updater", remote_homelab_updater_dir)
+
+            compose_cmd = (
+                f"cd {shlex.quote(remote_homelab_updater_dir)} && "
+                "chmod +x ./start.sh && ./start.sh"
+            )
+            run_checked_command(ssh_client, f"bash -lc {shlex.quote(compose_cmd)}", "Restarting homelab updater stack")
+
+            return {
+                "status": "updated",
+            }
+        except paramiko.AuthenticationException as e:
+            raise HTTPException(status_code=401, detail=f"Authentication failed: {e}") from e
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to update homelab panel: {e}") from e
+        finally:
+            if sftp:
+                sftp.close()
+            ssh_client.close()
 
 @app.get("/update/homelab_control_plane")
 def update_homelab_efficiency_server():
