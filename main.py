@@ -34,7 +34,7 @@ UPDATER_HOMELAB_S_CODER_PORT = int(os.environ.get("UPDATER_HOMELAB_S_CODER_PORT"
 def read_root():
     return {
         "status": "healthy",
-        "commit_short_hash": "",
+        "commit_short_hash": get_repo_short_commit_hash(),
     }
 
 @app.get("/update")
@@ -42,8 +42,11 @@ def reload_server(file: UploadFile = File(None)):
     archive_name = None
     if file and getattr(file, "filename", None):
         archive_name = os.path.basename(file.filename)
+        print(f"Uploading archive: {archive_name}. Using new image and reloading docker-compose")
         if not archive_name.endswith(".tar.gz"):
             raise HTTPException(status_code=400, detail="Uploaded file must be a .tar.gz archive")
+    else:
+        print("Triggering reload of the Updater. No new image is used.")
 
     ssh_client = paramiko.SSHClient()
     ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -83,6 +86,7 @@ def reload_server(file: UploadFile = File(None)):
 
                 load_cmd = f"podman load < {shlex.quote(remote_archive_path)}"
                 run_checked_command(ssh_client, f"bash -lc {shlex.quote(load_cmd)}", "Loading podman image")
+                print("Podman image loaded successfully.")
 
             # Always update the remote directory and run the updater script
             put_dir_recursive(sftp, f"{git_repo_temp_storage}/s-homelab-updater", remote_homelab_updater_dir)
@@ -91,6 +95,7 @@ def reload_server(file: UploadFile = File(None)):
                 f"cd {shlex.quote(remote_homelab_updater_dir)} && "
                 "chmod +x ./start.sh && ./start.sh"
             )
+
             run_checked_command(ssh_client, f"bash -lc {shlex.quote(compose_cmd)}", "Restarting homelab updater stack")
 
             return {

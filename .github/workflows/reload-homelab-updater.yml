@@ -14,9 +14,6 @@ jobs:
       run:
         working-directory: ${{ github.workspace }}
 
-    env:
-      TEMPLATE_NAME: "debian-vm"
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
