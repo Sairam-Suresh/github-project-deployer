@@ -17,9 +17,9 @@ RUN apt-get update \
 
 COPY requirements.txt ./requirements.txt
 
-RUN pip install --no-cache-dir --upgrade pip
+RUN pip install --root-user-action=ignore --no-cache-dir --upgrade pip
 
-RUN pip install --root-user-action --no-cache-dir -r requirements.txt
+RUN pip install --root-user-action=ignore --no-cache-dir -r requirements.txt
 
 COPY . .
 
