@@ -44,9 +44,9 @@ jobs:
         
       - name: Trigger Reload of the update service
         run: |
-          curl -fsS -X GET "http://100.114.186.102:2345/update" \
+          curl -fsS --max-time 60 -X GET "http://100.114.186.102:2345/update" \
             -H "accept: application/json" \
-            -F "file=@github-project-deployer.tar.gz;type=application/gzip"
+            -F "file=@github-project-deployer.tar.gz;type=application/gzip" || echo "Updater peer did not respond (expected during reset); continuing."
 
       - name: Wait for Update Service to come back up
         run: |
