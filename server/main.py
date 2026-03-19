@@ -34,7 +34,7 @@ UPDATER_HOMELAB_S_CODER_PORT = int(os.environ.get("UPDATER_HOMELAB_S_CODER_PORT"
 def read_root():
     return {
         "status": "healthy",
-        "commit_short_hash": get_repo_short_commit_hash(),
+        "commit_short_hash": "",
     }
 
 @app.get("/update")

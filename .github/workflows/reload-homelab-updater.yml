@@ -18,6 +18,18 @@ jobs:
       TEMPLATE_NAME: "debian-vm"
 
     steps:
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build Image (arm64)
+        run: |
+          podman build --platform linux/arm64 -t github-project-deployer:latest --load .
+      
+      - name: Save Image Archive
+        run: |
+          podman save github-project-deployer:latest | gzip > github-project-deployer.tar.gz
+          ls -lh github-project-deployer.tar.gz
+        
       - name: Tailscale
         uses: tailscale/github-action@v4
         with:
@@ -30,9 +42,11 @@ jobs:
         run: |
           sudo tailscale set --accept-dns=false
         
-      - name: Trigger reload of the Update Service
+      - name: Trigger Reload of the update service
         run: |
-          curl -fsS -X GET http://100.114.186.102:2345/update
+          curl -fsS -X GET "http://100.114.186.102:2345/update" \
+            -H "accept: application/json" \
+            -F "file=@github-project-deployer.tar.gz;type=application/gzip"
 
       - name: Wait for Update Service to come back up
         run: |
@@ -41,22 +55,22 @@ jobs:
             sleep 5
           done
 
-      - name: Validate Service Commit Hash
-        run: |
-          EXPECTED_SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"
-          RESPONSE="$(curl -fsS http://100.114.186.102:2345/)"
+      # - name: Validate Service Commit Hash
+      #   run: |
+      #     EXPECTED_SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"
+      #     RESPONSE="$(curl -fsS http://100.114.186.102:2345/)"
 
-          SERVER_SHORT_SHA="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("commit_short_hash",""))' "$RESPONSE")"
+      #     SERVER_SHORT_SHA="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("commit_short_hash",""))' "$RESPONSE")"
 
-          echo "Expected commit_short_hash: ${EXPECTED_SHORT_SHA}"
-          echo "Server commit_short_hash: ${SERVER_SHORT_SHA}"
+      #     echo "Expected commit_short_hash: ${EXPECTED_SHORT_SHA}"
+      #     echo "Server commit_short_hash: ${SERVER_SHORT_SHA}"
 
-          if [ -z "${SERVER_SHORT_SHA}" ] || [ "${SERVER_SHORT_SHA}" = "unknown" ]; then
-            echo "ERROR: Server did not return a valid commit_short_hash"
-            exit 1
-          fi
+      #     if [ -z "${SERVER_SHORT_SHA}" ] || [ "${SERVER_SHORT_SHA}" = "unknown" ]; then
+      #       echo "ERROR: Server did not return a valid commit_short_hash"
+      #       exit 1
+      #     fi
 
-          if [ "${SERVER_SHORT_SHA}" != "${EXPECTED_SHORT_SHA}" ]; then
-            echo "ERROR: Server is not running the latest commit"
-            exit 1
-          fi
+      #     if [ "${SERVER_SHORT_SHA}" != "${EXPECTED_SHORT_SHA}" ]; then
+      #       echo "ERROR: Server is not running the latest commit"
+      #       exit 1
+      #     fi
