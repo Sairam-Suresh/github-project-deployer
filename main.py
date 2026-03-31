@@ -143,8 +143,8 @@ def update_homelab_efficiency_server():
 
             run_checked_command(
                 ssh_client,
-                f"mv {shlex.quote(remote_homelab_dir)} {shlex.quote(f'{remote_home}/homelab_backup')}",
-                "Backing up existing homelab directory",
+                f"rm -r {shlex.quote(remote_homelab_dir)}",
+                "Removing existing homelab directory",
             )
             put_dir_recursive(sftp, f"{git_repo_temp_storage}/control-plane", remote_homelab_dir)
             stdout_text, stderr_text = run_checked_command(
